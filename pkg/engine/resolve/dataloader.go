@@ -1,6 +1,7 @@
 package resolve
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 
@@ -187,7 +188,7 @@ func (d *dataLoader) Load(ctx *Context, fetch *SingleFetch, responsePair *BufPai
 		return
 	}
 
-	fetchParams, err := d.selectedDataForFetch(parentResult.data(), ctx.responseElements...)
+	fetchParams, err := d.selectedDataForFetch(parentResult.data(), ctx.responseElements, fetch.TypeName)
 	if err != nil {
 		return err
 	}
@@ -222,7 +223,7 @@ func (d *dataLoader) LoadBatch(ctx *Context, batchFetch *BatchFetch, responsePai
 		return fmt.Errorf("has not got fetch for %d", ctx.lastFetchID)
 	}
 
-	fetchParams, err := d.selectedDataForFetch(parentResult.data(), ctx.responseElements...)
+	fetchParams, err := d.selectedDataForFetch(parentResult.data(), ctx.responseElements, batchFetch.Fetch.TypeName)
 	if err != nil {
 		return err
 	}
@@ -340,7 +341,7 @@ func (d *dataLoader) setFetchState(batchState fetchState, fetchID int) {
 	d.fetches[fetchID] = batchState
 }
 
-func (d *dataLoader) selectedDataForFetch(input [][]byte, path ...string) ([][]byte, error) {
+func (d *dataLoader) selectedDataForFetch(input [][]byte, path []string, filterTypeName []byte) ([][]byte, error) {
 	if len(path) == 0 {
 		return input, nil
 	}
@@ -357,13 +358,20 @@ func (d *dataLoader) selectedDataForFetch(input [][]byte, path ...string) ([][]b
 				return nil, nil
 			}
 
-			return d.selectedDataForFetch(vals, rest...)
+			return d.selectedDataForFetch(vals, rest, filterTypeName)
 		})
 	}
 
 	temp := make([][]byte, 0, len(input))
 
 	for i := range input {
+		if filterTypeName != nil {
+			typeName, _, _, err := jsonparser.Get(input[i], "__typename")
+			if err == nil && !bytes.Equal(filterTypeName, typeName) {
+				continue
+			}
+		}
+
 		el, dataType, _, err := jsonparser.Get(input[i], current)
 		if dataType == jsonparser.NotExist {
 			// The input has an object that doesn't contain the path component.
@@ -406,7 +414,7 @@ func (d *dataLoader) selectedDataForFetch(input [][]byte, path ...string) ([][]b
 		temp = append(temp, el)
 	}
 
-	return d.selectedDataForFetch(temp, rest...)
+	return d.selectedDataForFetch(temp, rest, filterTypeName)
 }
 
 func (d *dataLoader) getResultBufPair() (pair *BufPair) {

@@ -1848,6 +1848,86 @@ func TestResolver_ResolveNode(t *testing.T) {
 			}))
 		})
 	})
+
+	t.Run("should set Fetch.TypeName for fields with type condition", testFn(true, false, func(t *testing.T, ctrl *gomock.Controller) (node Node, ctx Context, expectedOutput string) {
+		mockDataSource := NewMockDataSource(ctrl)
+		var (
+			record   *Object
+			typeName = []byte("Dog")
+		)
+
+		mockDataSource.EXPECT().
+			Load(gomock.Any(), gomock.GotFormatterAdapter(gotBytesFormatter{}, matchBytes(`{"id":1}`)), gomock.AssignableToTypeOf(&bytes.Buffer{})).
+			Do(func(ctx context.Context, input []byte, w io.Writer) (err error) {
+				assert.Equal(t, record.Fields[1].Value.(*Object).Fetch.(*SingleFetch).TypeName, typeName)
+				_, err = w.Write([]byte(`{"__typename": "Dog", "name":"Woofie"}`))
+				return
+			}).
+			Return(nil)
+
+		record = &Object{
+			Fetch: &SingleFetch{
+				BufferId:   0,
+				DataSource: FakeDataSource(`{"__typename": "Dog", "id":1}`),
+			},
+			Fields: []*Field{
+				{
+					HasBuffer: true,
+					BufferID:  0,
+					Name:      []byte("id"),
+					Value: &Integer{
+						Path: []string{"id"},
+					},
+				},
+				{
+					HasBuffer:  true,
+					BufferID:   0,
+					OnTypeName: typeName,
+					Name:       []byte("pet"),
+					Value: &Object{
+						Fetch: &SingleFetch{
+							BufferId:   0,
+							DataSource: mockDataSource,
+							Input:      `{"id":$$0$$}`,
+							InputTemplate: InputTemplate{
+								Segments: []TemplateSegment{
+									{
+										SegmentType: StaticSegmentType,
+										Data:        []byte(`{"id":`),
+									},
+									{
+										SegmentType:        VariableSegmentType,
+										VariableKind:       ObjectVariableKind,
+										VariableSourcePath: []string{"id"},
+										Renderer:           NewGraphQLVariableRenderer(`{"type":"number"}`),
+									},
+									{
+										SegmentType: StaticSegmentType,
+										Data:        []byte(`}`),
+									},
+								},
+							},
+							Variables: NewVariables(&ObjectVariable{
+								Path: []string{"id"},
+							}),
+						},
+						Fields: []*Field{
+							{
+								BufferID:  0,
+								HasBuffer: true,
+								Name:      []byte("name"),
+								Value: &String{
+									Path: []string{"name"},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		return record, Context{ctx: context.Background()}, `{"id":1,"pet":{"name":"Woofie"}}`
+	}))
 }
 
 func TestResolver_WithHooks(t *testing.T) {

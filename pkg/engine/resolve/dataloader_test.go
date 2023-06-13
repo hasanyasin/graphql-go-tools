@@ -611,6 +611,69 @@ func TestDataLoader_LoadBatch(t *testing.T) {
 		}, &Context{ctx: context.Background(), lastFetchID: 1, responseElements: []string{"someProp"}}, `{"user": {"id":22, "username": "Username 22"}}`
 	}))
 
+	t.Run("should skip records with unmatched types when fetch.TypeName is set because of a type condition", testFn(map[int]fetchState{
+		1: &batchFetchState{
+			nextIdx:    0,
+			fetchError: nil,
+			results: []*BufPair{
+				newBufPair(`{"__typename":"ProductItem", "item":{"upc": "top-1", "__typename": "Product"}}`, ``),
+				newBufPair(`{"__typename":"ServiceItem", "item":{{"upc": "top-2", "__typename": "Service"}}`, ``),
+			},
+		},
+	}, func(t *testing.T, ctrl *gomock.Controller) (fetch *BatchFetch, ctx *Context, expectedOutput string) {
+		batchFactory := NewMockDataSourceBatchFactory(ctrl)
+		batchFactory.EXPECT().
+			CreateBatch(
+				[][]byte{
+					[]byte(`{"method":"POST","url":"http://localhost:4003","body":{"query":"query($representations: [_Any!]!){_entities(representations: $representations){... on Product {name}}}","variables":{"representations":[{"upc":"top-1","__typename":"Product"}]}}}`),
+				},
+			).Return(NewFakeDataSourceBatch(
+			`{"method":"POST","url":"http://localhost:4003","body":{"query":"query($representations: [_Any!]!){_entities(representations: $representations){... on Product {name}}}","variables":{"representations":[{"upc":"top-1","__typename":"Product"}]}}}`,
+			[]resultedBufPair{
+				{data: `{"name": "Fedora"}`},
+			}), nil)
+
+		userService := NewMockDataSource(ctrl)
+		userService.EXPECT().
+			Load(gomock.Any(), gomock.Any(), gomock.AssignableToTypeOf(&bytes.Buffer{})).
+			Do(func(ctx context.Context, input []byte, w io.Writer) (err error) {
+				actual := string(input)
+				expected := `{"method":"POST","url":"http://localhost:4003","body":{"query":"query($representations: [_Any!]!){_entities(representations: $representations){... on Product {name}}}","variables":{"representations":[{"upc":"top-1","__typename":"Product"}]}}}`
+				assert.Equal(t, expected, actual)
+				pair := NewBufPair()
+				pair.Data.WriteString(`[{"name": "Fedora"}]`)
+				return writeGraphqlResponse(pair, w, false)
+			}).
+			Return(nil)
+
+		return &BatchFetch{
+			Fetch: &SingleFetch{
+				BufferId: 2,
+				TypeName: []byte("ProductItem"),
+				InputTemplate: InputTemplate{
+					Segments: []TemplateSegment{
+						{
+							Data:        []byte(`{"method":"POST","url":"http://localhost:4003","body":{"query":"query($representations: [_Any!]!){_entities(representations: $representations){... on Product {name}}}","variables":{"representations":[{"upc":`),
+							SegmentType: StaticSegmentType,
+						},
+						{
+							SegmentType:        VariableSegmentType,
+							VariableKind:       ObjectVariableKind,
+							VariableSourcePath: []string{"upc"},
+							Renderer:           NewJSONVariableRendererWithValidation(`{"type":"string"}`),
+						},
+						{
+							Data:        []byte(`,"__typename":"Product"}]}}}`),
+							SegmentType: StaticSegmentType,
+						},
+					},
+				},
+				DataSource: userService,
+			},
+			BatchFactory: batchFactory,
+		}, &Context{ctx: context.Background(), lastFetchID: 1, responseElements: []string{"item"}}, `{"name": "Fedora"}`
+	}))
+
 	t.Run("fetch error", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		dlFactory := newDataloaderFactory(NewFetcher(false))

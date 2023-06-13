@@ -1132,7 +1132,17 @@ func (r *Resolver) resolveObject(ctx *Context, object *Object, data []byte, obje
 
 		if object.Fields[i].OnTypeName != nil {
 			typeName, _, _, _ := jsonparser.Get(fieldData, "__typename")
-			if !bytes.Equal(typeName, object.Fields[i].OnTypeName) {
+			if bytes.Equal(typeName, object.Fields[i].OnTypeName) {
+				// Store TypeName for fetch so that dataLoader will not collect records with unmatching types together
+				if fieldObject, ok := object.Fields[i].Value.(*Object); ok {
+					switch fetch := fieldObject.Fetch.(type) {
+					case *SingleFetch:
+						fetch.TypeName = typeName
+					case *BatchFetch:
+						fetch.Fetch.TypeName = typeName
+					}
+				}
+			} else {
 				typeNameSkip = true
 				// Restore the response elements that may have been reset above.
 				ctx.responseElements = responseElements
@@ -1421,6 +1431,7 @@ type SingleFetch struct {
 	DisallowSingleFlight  bool
 	DisableDataLoader     bool
 	InputTemplate         InputTemplate
+	TypeName              []byte
 	DataSourceIdentifier  []byte
 	ProcessResponseConfig ProcessResponseConfig
 	// SetTemplateOutputToNullOnVariableNull will safely return "null" if one of the template variables renders to null
